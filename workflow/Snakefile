@@ -1,0 +1,126 @@
+
+from os import path
+import re
+from pandas import read_excel
+
+configfile: "config.yaml"
+
+genome_data = read_excel("input/pbio.3001430.s002.xlsx")
+
+genomes = {}
+
+dois = {
+    "https://doi.org/10.1038/s41467-020-15507": "Moniruzzaman19",
+    "https://doi.org/10.1038/s41586-020-1957-x": "GVMAGs",
+    "https://doi.org/10.1016/j.cub.2020.09.056": "Rozenberg19",
+    "https://doi.org/10.1128/mBio.02497-18": "Backstrom19"
+}
+
+for i, genome in genome_data.iterrows():
+    source = genome['GenBank ID or DOI of Source Publication']
+    if source.startswith('GCA'):
+        genome['source'] = 'assembly'
+        genome['search'] = source
+    elif source.startswith('https://doi.org/'):
+        genome['source'] = dois[source]
+        genome['search'] = genome['genome_id']
+    else:
+        genome['source'] = 'nucleotide'
+        genome['search'] = source
+    genomes[genome['genome_id']] = genome
+
+rule all:
+    input:
+        expand("analysis/genomes/{genome}.gbk", genome = genomes.keys())
+
+def get_source_wc(source, prefix = False):
+    if prefix:
+        ids = [ gid for gid, g in genomes.items() if g['source'].startswith(source) ]
+    else:
+        ids = [ gid for gid, g in genomes.items() if g['source'] == source ]
+    return '|'.join(ids)
+
+rule get_assembly:
+    output:
+        "analysis/genomes/{genome}.gbk"
+    wildcard_constraints:
+        genome = get_source_wc('assembly')
+    params:
+        genome = lambda w: genomes[w.genome]
+    resources:
+        ncbi = 1
+    conda:
+        "envs/biopython.yaml"
+    script:
+        "scripts/get_assembly.py"
+
+rule get_nucleotide:
+    output:
+        "analysis/genomes/{genome}.gbk"
+    wildcard_constraints:
+        genome = get_source_wc('nucleotide')
+    params:
+        genome = lambda w: genomes[w.genome]
+    resources:
+        ncbi = 1
+    conda:
+        "envs/biopython.yaml"
+    script:
+        "scripts/get_nucleotide.py"
+
+def doi_source(w):
+    source = genomes[w.genome]['source'].replace('/', '_').replace(':', '_')
+    return f"sources/{source}.gbk"
+
+
+rule get_Rozenberg19:
+    input:
+        "sources/Rozenberg19.gbk"
+    output:
+        "analysis/genomes/{genome}.gbk"
+    wildcard_constraints:
+        genome = get_source_wc('Rozenberg19')
+    shell:
+        "cp {input} {output}"
+
+rule get_Backstrom19:
+    input:
+        "sources/Backstrom19.gbk"
+    output:
+        "analysis/genomes/{genome}.gbk"
+    wildcard_constraints:
+        genome = get_source_wc('Backstrom19')
+    params:
+        genome = lambda w: genomes[w.genome]
+    conda:
+        "envs/biopython.yaml"
+    script:
+        "scripts/get_Backstrom19.py"
+
+rule get_Moniruzzaman19:
+    input:
+        "sources/Moniruzzaman19/final_bins_nucl"
+    output:
+        "analysis/genomes/{genome}.gbk"
+    wildcard_constraints:
+        genome = get_source_wc('Moniruzzaman19')
+    params:
+        genome = lambda w: genomes[w.genome]
+    conda:
+        "envs/biopython.yaml"
+    script:
+        "scripts/get_Moniruzzaman19.py"
+
+rule get_GVMAGs:
+    input:
+        "sources/GVMAGs/data"
+    output:
+        "analysis/genomes/{genome}.gbk"
+    wildcard_constraints:
+        genome = get_source_wc('GVMAGs')
+    params:
+        genome = lambda w: genomes[w.genome]
+    conda:
+        "envs/biopython.yaml"
+    script:
+        "scripts/get_GVMAGs.py"
