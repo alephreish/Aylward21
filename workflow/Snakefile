@@ -2,36 +2,59 @@
 from os import path
 import re
 from pandas import read_excel
+import requests
 
-configfile: "config.yaml"
+red_text = "\033[91m"
+reset_color = "\033[0m"
 
-genome_data = read_excel("input/pbio.3001430.s002.xlsx")
+if not path.exists("sources/GVMAGs"):
+    print(f"{red_text}GVMAGs data not found. Download all files from https://genome.jgi.doe.gov/portal/GVMAGs/GVMAGs.home.html and unpack in 'sources/', e.g. unzip `GVMAGs_download.zip -d sources/`{reset_color}\n")
+    sys.exit(1)  # Exit with an error code (non-zero) to indicate an error.
+
+if "email" not in config:
+    print(f"{red_text}You have to specify your email e.g. with --config email=<your email> or in a configuration file{reset_color}\n")
+    sys.exit(1)
+
+genomes_file = "input/pbio.3001430.s002.xlsx"
+if not path.isfile(genomes_file):
+    remote_url = "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8575486/bin/pbio.3001430.s002.xlsx"
+    response = requests.get(remote_url)
+    with open(genomes_file, "wb") as file:
+        file.write(response.content)
+
+genome_data = read_excel(genomes_file)
 
 genomes = {}
 
-dois = {
+sources = {
     "https://doi.org/10.1038/s41467-020-15507": "Moniruzzaman19",
     "https://doi.org/10.1038/s41586-020-1957-x": "GVMAGs",
-    "https://doi.org/10.1016/j.cub.2020.09.056": "Rozenberg19",
+    "https://doi.org/10.1016/j.cub.2020.09.056": "manual",
+    "GCA_000427115.1": "manual",
+    "GCA_000427135.1": "manual",
+    "GCA_000427155.1": "manual",
     "https://doi.org/10.1128/mBio.02497-18": "Backstrom19"
+}
+aka_aliases = {
+    "IM_01": "Mesomimiviridae"
 }
 
 for i, genome in genome_data.iterrows():
     source = genome['GenBank ID or DOI of Source Publication']
-    if source.startswith('GCA'):
-        genome['source'] = 'assembly'
-        genome['search'] = source
-    elif source.startswith('https://doi.org/'):
-        genome['source'] = dois[source]
+    if genome["Family"] in aka_aliases:
+        genome["Family_AKA"] = aka_aliases[genome["Family"]]
+    if source in sources:
+        genome['source'] = sources[source]
         genome['search'] = genome['genome_id']
     else:
-        genome['source'] = 'nucleotide'
+        genome['source'] = 'assembly' if source.startswith('GCA') else 'nucleotide'
         genome['search'] = source
     genomes[genome['genome_id']] = genome
 
 rule all:
     input:
-        expand("analysis/genomes/{genome}.gbk", genome = genomes.keys())
+        "output/Aylward21.fna.ndb"
+        # "analysis/eukulele/eukprot/taxonomy_estimation/final.contigs-estimated-taxonomy.out"
 
 def get_source_wc(source, prefix = False):
     if prefix:
@@ -72,14 +95,29 @@ def doi_source(w):
     source = genomes[w.genome]['source'].replace('/', '_').replace(':', '_')
     return f"sources/{source}.gbk"
 
+rule dload_Moniruzzaman19:
+    output:
+        directory("sources/Moniruzzaman19/final_bins_nucl")
+    params:
+        file_id = 18519410
+    shell:
+        "wget -O- https://figshare.com/ndownloader/files/{params.file_id} | tar -xzvf - -C $(dirname {output})"
 
-rule get_Rozenberg19:
+rule unpack_GVMAGs:
     input:
-        "sources/Rozenberg19.gbk"
+        "sources/GVMAGs/data/{dataset}.tar.gz"
+    output:
+        directory("sources/GVMAGs/data/{dataset}")
+    shell:
+        "tar xfz {input} -C $(dirname {output}) && rm {input}"
+
+rule get_manual:
+    input:
+        "sources/manual/{genome}.gbk"
     output:
         "analysis/genomes/{genome}.gbk"
     wildcard_constraints:
-        genome = get_source_wc('Rozenberg19')
+        genome = get_source_wc('manual')
     shell:
         "cp {input} {output}"
 
@@ -113,7 +151,7 @@ rule get_Moniruzzaman19:
 
 rule get_GVMAGs:
     input:
-        "sources/GVMAGs/data"
+        expand("sources/GVMAGs/data/{dataset}", dataset = [ "GVMAGs_high", "GVMAGs_low", "GVMAGs_medium" ])
     output:
         "analysis/genomes/{genome}.gbk"
     wildcard_constraints:
@@ -124,3 +162,86 @@ rule get_GVMAGs:
         "envs/biopython.yaml"
     script:
         "scripts/get_GVMAGs.py"
+
+rule gbk_to_fna:
+    input:
+        "analysis/genomes/{genome}.gbk"
+    output:
+        "analysis/genomes/{genome}.fna"
+    params:
+        genome = lambda w: genomes[w.genome]
+    conda:
+        "envs/biopython.yaml"
+    script:
+        "scripts/gbk_to_fna.py"
+
+rule cat_fna:
+    input:
+        expand("analysis/genomes/{genome}.fna", genome = genomes.keys())
+    output:
+        "output/Aylward21.fna"
+    shell:
+        "cat {input} > {output}"
+
+rule makeblastdb:
+    input:
+        "output/Aylward21.fna"
+    output:
+        "output/Aylward21.fna.ndb"
+    params:
+        title = 'Aylward et al 2021 giant viruses'
+    conda:
+        "envs/blast.yaml"
+    shell:
+        "makeblastdb -title '{params.title}' -parse_seqids -in {input} -dbtype nucl"
+
+rule eukulele_dload:
+    output:
+        directory("databases/{database}")
+    params:
+        ref_dir = "databases"
+    conda:
+        "envs/eukulele.yaml"
+    shell:
+        "EUKulele download --database {wildcards.database} --reference_dir {params.ref_dir}/"
+
+rule eukulele:
+    input:
+        fasta = "analysis/genes/Aylward21.faa",
+        db = "databases/{database}"
+    output:
+        "analysis/eukulele/{database}/taxonomy_estimation/final.contigs-estimated-taxonomy.out"
+    params:
+        ext = "faa",
+        sample_dir = "analysis/genes",
+        output_dir = "eukulele/{database}",
+        ref_dir = "databases"
+    threads:
+        workflow.cores
+    conda:
+        "envs/eukulele.yaml"
+    log:
+        "analysis/eukulele/EUKulele_{database}.log"
+    shell:
+        "EUKulele --CPUs {threads} -m mets --no_busco --n_ext {params.ext} -d {wildcards.database} -s {params.sample_dir} -o {params.output_dir} --reference_dir {params.ref_dir} &> {log}"
+
+rule eukulele_fna:
+    input:
+        "output/Aylward21.fna"
+    output:
+        "analysis/genes/Aylward21.fna"
+    shell:
+        "cp {input} {output}"
+
+rule prodigal:
+    input:
+        "output/Aylward21.fna"
+    output:
+        gff = "analysis/genes/Aylward21.gff",
+        faa = "analysis/genes/Aylward21.faa"
+    shadow:
+        "minimal"
+    conda:
+        "envs/genes.yaml"
+    shell:
+        "prodigal -i {input} -m -p meta -f gff -o {output.gff} -a {output.faa}"

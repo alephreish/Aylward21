@@ -13,7 +13,8 @@ def expand_interval(interval):
     num_pos = len(start)
     expanded_list = []
     for i in range(int(start), int(end) + 1):
-        expanded_list.append(f"{prefix1}{str(i).zfill(num_pos)}.{suffix1}")
+        num = str(i).zfill(num_pos)
+        expanded_list.append(f"{prefix1}{num}.{suffix1}")
     return expanded_list
 
 ids = expand_interval(genome['search'])

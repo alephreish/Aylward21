@@ -1,15 +1,14 @@
 from Bio import SeqIO
 from os import path, listdir
 
-input_dir = str(snakemake.input)
 output_file = str(snakemake.output)
 genome = snakemake.params['genome']
 
 input_file = None
 found = False
-for dirname1 in listdir(input_dir):
-    for dirname2 in listdir(path.join(input_dir, dirname1)):
-        filename = path.join(input_dir, dirname1, dirname2, genome['search'] + '.fna')
+for dirname1 in snakemake.input:
+    for dirname2 in listdir(path.join(dirname1)):
+        filename = path.join(dirname1, dirname2, genome['search'] + '.fna')
         if path.exists(filename):
             input_file = filename
             found = True
